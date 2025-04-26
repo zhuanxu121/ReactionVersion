@@ -2,16 +2,17 @@
 
 import os
 import csv
+import random
+
 from rdkit import Chem
 from rdkit.Chem import Draw
-import math
 import numpy as np
-from Atom_Descriptors import get_molecule_feature_matrix,functional_groups,Atom_Descriptors_test
-from Bond_Descriptors import generate_adjacency_and_bond_descriptor_matrix,Bond_Descriptors_test
-from Global_Information_Vector import generate_global_vector,Global_Information_Vector_test
+from .Atom_Descriptors import get_molecule_feature_matrix,functional_groups,Atom_Descriptors_test
+from .Bond_Descriptors import generate_adjacency_and_bond_descriptor_matrix,Bond_Descriptors_test
+from .Global_Information_Vector import generate_global_vector,Global_Information_Vector_test
 
 
-def load_and_preprocess_csv(input_file='Dataset/47083204_Trans_G2S_val.csv', batch_size=32):
+def load_and_preprocess_csv(input_file='C:/Users/86187/PycharmProjects/ReactVision_Core/Dataset/47083204_Trans_G2S_val.csv'):
     """
     读取 CSV 文件，解析其中的 rxn_smiles 字段，依据反应步骤构成完整反应序列，
     反应序列的每一步格式为 "SMILES1 >> SMILES2"。当遇到某一步中反应物与产物相同时，
@@ -160,34 +161,31 @@ def test_visualization(reactions, output_dir='mol_images'):
 
 class ReactionBatchReader:
     """
-    用于按批次读取 reactions 数据中的分子（这里取 reactants 内的 SMILES），
-    并转换为分子图表示（包含原子描述矩阵、邻接矩阵、键描述矩阵、全局向量）。
+    用于按批次读取 reactions 数据中的反应物 SMILES，并转换为分子图表示（包含原子描述矩阵、邻接矩阵、键描述矩阵、全局向量）。
 
     该类会记住当前的读取位置，每次调用 next_batch() 时返回一个 batch_size 的批次，
-    直到数据读完（此时返回 None）。
+    直到数据读完（此时返回 None）。每个批次会按反应方程式返回多个反应物的字典。
     """
 
     def __init__(self, reactions, batch_size=16, functional_groups=None):
         """
         :param reactions: 反应序列列表，每个元素为字典 {'reactants', 'intermediates', 'products'}（通常由 load_and_preprocess_csv 得到）
-        :param batch_size: 每批处理的分子数
+        :param batch_size: 每批处理的反应方程式数
         :param functional_groups: 官能团字典，供特征工程使用
         """
         self.reactions = reactions
         self.batch_size = batch_size
         self.functional_groups = functional_groups
         self.tasks = []
-        # 此处仅以反应物作为处理对象，可根据需要扩展到中间体或产物
+        # 将每个反应方程式中的反应物组合成任务
         for r in reactions:
-            for s in r['reactants']:
-                # 此处 reaction_mixture 与 analyte 作为示例参数，可根据实际情况调整
-                self.tasks.append((s, ['CCCl', 'CCCBr', 'C1=CC=CC=C1', 'CC(=O)O'], 'CCCBr'))
+            self.tasks.append(r['reactants'])  # 仅添加反应物列表
         self.current_index = 0
         self.num_tasks = len(self.tasks)
 
     def next_batch(self):
         """
-        返回下一个 batch 的分子图数据，每个元素为字典：
+        返回下一个 batch 的反应物数据，每个元素为一个字典，包含反应物的分子图数据：
           {
               'smiles': str,
               'atom_matrix': np.ndarray or None,
@@ -198,69 +196,165 @@ class ReactionBatchReader:
         如果已读取完所有数据，则返回 None。
         """
         if self.current_index >= self.num_tasks:
-            return None  # 或者可选择重置 self.current_index=0，实现循环读取
+            return None  # 或者可以选择重置 self.current_index = 0，实现循环读取
 
         batch = self.tasks[self.current_index: self.current_index + self.batch_size]
         self.current_index += self.batch_size
         batch_results = []
-        for (smi, reaction_mixture, analyte) in batch:
-            mol = Chem.MolFromSmiles(smi)
-            if mol is None:
-                batch_results.append({
+
+        # 处理每个反应方程式
+        for reactants in batch:
+            reaction_result = []  # 存储当前反应方程式的反应物信息
+            for smi in reactants:  # 遍历反应物
+                mol = Chem.MolFromSmiles(smi)
+                if mol is None:
+                    reaction_result.append({
+                        'smiles': smi,
+                        'atom_matrix': None,
+                        'bond_matrix': None,
+                        'adjacency_matrix': None,
+                        'global_vector': None
+                    })
+                    continue
+                # 调用特征工程函数
+                atom_matrix = get_molecule_feature_matrix(smi, self.functional_groups, max_distance=5)
+                adjacency_matrix, bond_matrix = generate_adjacency_and_bond_descriptor_matrix(smi)
+                # # 假设此时我们取一个反应物作为analyte
+                # analyte = reactants[0]  # 可以根据需求选择反应物或产物
+                global_vector = generate_global_vector(reactants, smi, self.functional_groups)
+
+                reaction_result.append({
                     'smiles': smi,
-                    'atom_matrix': None,
-                    'bond_matrix': None,
-                    'adjacency': None,
-                    'global_vector': None
+                    'atom_matrix': atom_matrix,
+                    'bond_matrix': bond_matrix,
+                    'adjacency_matrix': adjacency_matrix,
+                    'global_vector': global_vector
                 })
-                continue
-            # 调用你已实现的特征工程函数
-            atom_matrix = get_molecule_feature_matrix(smi, self.functional_groups, max_distance=5)
-            adjacency_matrix, bond_matrix = generate_adjacency_and_bond_descriptor_matrix(smi)
-            global_vector = generate_global_vector(reaction_mixture, analyte, self.functional_groups)
-            batch_results.append({
-                'smiles': smi,
-                'atom_matrix': atom_matrix,
-                'bond_matrix': bond_matrix,
-                'adjacency': adjacency_matrix,
-                'global_vector': global_vector
-            })
+
+            batch_results.append(reaction_result)  # 添加当前反应方程式的反应物数据
+
         return batch_results
+
+#测试用
+def add_random_features(atom_matrix, num_features=13):
+    """
+    为原子特征矩阵添加新的随机特征，新的特征有13维，90%概率为零，10%概率为1到10之间的随机正数。
+
+    :param atom_matrix: 原子的特征矩阵，形状是 (num_atoms, original_features)
+    :param num_features: 新添加的特征维度数
+    :return: 更新后的原子特征矩阵
+    """
+    num_atoms = atom_matrix.shape[0]
+    random_features = np.zeros((num_atoms, num_features))
+
+    # 为每个原子生成13个新特征
+    for i in range(num_atoms):
+        for j in range(num_features):
+            # 90%的概率为零，10%的概率为1到10之间的随机正数
+            if random.random() < 0.1:
+                random_features[i, j] = random.randint(1, 10)
+
+    # 将新特征添加到原子的特征矩阵中
+    updated_atom_matrix = np.hstack((atom_matrix, random_features))
+    return updated_atom_matrix
 
 
 if __name__ == "__main__":
+    np.set_printoptions(threshold=np.inf)
     # 读取并分类反应数据
     parsed_reactions = load_and_preprocess_csv()
     print("Parsed reaction sequences count:", len(parsed_reactions))
 
     # 初始化批量读取器，取反应物中的 SMILES
-    reader = ReactionBatchReader(parsed_reactions, batch_size=16, functional_groups=functional_groups)
+    reader = ReactionBatchReader(parsed_reactions, batch_size=1, functional_groups=functional_groups)
     batch = reader.next_batch()
+
     if batch is None:
         print("没有更多数据")
     else:
-        print(f"返回了一个批次，共包含 {len(batch)} 个分子图数据")
-        for idx, item in enumerate(batch, start=1):
-            print(f"\n----------- 分子 {idx}: {item['smiles']} -----------")
+        print(f"返回了一个批次，共包含 {len(batch)} 个反应方程式数据")
 
-            # 调用全局向量测试函数
-            if item['global_vector'] is not None:
-                Global_Information_Vector_test(item['global_vector'])
-            else:
-                print("全局信息向量: None")
+        # 遍历批次中的每个反应方程式
+        for batch_idx, reaction_data in enumerate(batch, start=1):
+            print(f"\n=== Reaction Equation {batch_idx} ===")
 
-            # 调用邻接矩阵和键描述测试函数
-            if (item['adjacency'] is not None) and (item['bond_matrix'] is not None):
-                Bond_Descriptors_test(item['adjacency'], item['bond_matrix'])
-            else:
-                print("邻接矩阵/键描述矩阵: None")
+            # 遍历当前反应方程式中的每个反应物
+            for reactant_idx, item in enumerate(reaction_data, start=1):
+                print(f"----------- Reactant {reactant_idx} -----------")
+                print(f"SMILES: {item['smiles']}")
 
-            # 调用原子描述测试函数
-            if item['atom_matrix'] is not None:
-                Atom_Descriptors_test(item['atom_matrix'])
-            else:
-                print("原子描述矩阵: None")
-        print("========== 测试结束 ==========")
+                # 添加新的13维随机特征
+                if item['atom_matrix'] is not None:
+                    updated_atom_matrix = add_random_features(item['atom_matrix'])
+                    item['atom_matrix'] = updated_atom_matrix
+                    print(f"Updated Atom Matrix: {updated_atom_matrix.shape}")
+
+                # 调用全局向量测试函数
+                if item['global_vector'] is not None:
+                    Global_Information_Vector_test(item['global_vector'])
+                else:
+                    print("全局信息向量: None")
+
+                # 调用邻接矩阵和键描述测试函数
+                if (item['adjacency_matrix'] is not None) and (item['bond_matrix'] is not None):
+                    Bond_Descriptors_test(item['adjacency_matrix'], item['bond_matrix'])
+                else:
+                    print("邻接矩阵/键描述矩阵: None")
+
+                # 调用原子描述测试函数
+                if item['atom_matrix'] is not None:
+                    Atom_Descriptors_test(item['atom_matrix'])
+                else:
+                    print("原子描述矩阵: None")
+
+            print("====================================\n")
+    # 保存批次数据为txt文件
+    output_file = "../batch_output.txt"
+    with open(output_file, 'w') as f:
+        for reaction_data in batch:
+            for item in reaction_data:
+                f.write(f"SMILES: {item['smiles']}\n")
+                f.write(f"Atom Matrix: {item['atom_matrix']}\n")
+                f.write(f"Bond Matrix: {item['bond_matrix']}\n")
+                f.write(f"Adjacency Matrix: {item['adjacency_matrix']}\n")
+                f.write(f"Global Vector: {item['global_vector']}\n")
+                f.write("=" * 40 + "\n")
+    #
+    # if batch is None:
+    #     print("没有更多数据")
+    # else:
+    #     print(f"返回了一个批次，共包含 {len(batch)} 个反应方程式数据")
+    #
+    #     # 遍历批次中的每个反应方程式
+    #     for batch_idx, reaction_data in enumerate(batch, start=1):
+    #         print(f"\n=== Reaction Equation {batch_idx} ===")
+    #
+    #         # 遍历当前反应方程式中的每个反应物
+    #         for reactant_idx, item in enumerate(reaction_data, start=1):
+    #             print(f"----------- Reactant {reactant_idx} -----------")
+    #             print(f"SMILES: {item['smiles']}")
+    #
+    #             # 调用全局向量测试函数
+    #             if item['global_vector'] is not None:
+    #                 Global_Information_Vector_test(item['global_vector'])
+    #             else:
+    #                 print("全局信息向量: None")
+    #
+    #             # 调用邻接矩阵和键描述测试函数
+    #             if (item['adjacency'] is not None) and (item['bond_matrix'] is not None):
+    #                 Bond_Descriptors_test(item['adjacency'], item['bond_matrix'])
+    #             else:
+    #                 print("邻接矩阵/键描述矩阵: None")
+    #
+    #             # 调用原子描述测试函数
+    #             if item['atom_matrix'] is not None:
+    #                 Atom_Descriptors_test(item['atom_matrix'])
+    #             else:
+    #                 print("原子描述矩阵: None")
+    #
+    #         print("====================================\n")
+    #
+    #     print("========== 测试结束 ==========")
 
 # # 测试读取数据并分类反应物、中间体、生成物的部分
 # if __name__ == "__main__":

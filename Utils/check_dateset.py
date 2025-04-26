@@ -32,7 +32,7 @@ class ReactionChainViewer:
         self.image_refs = []
 
         # 默认 CSV 文件路径
-        self.default_path = "Dataset/47083204_Trans_G2S_val.csv"
+        self.default_path = "../Dataset/47083204_Trans_G2S_val.csv"
         self.file_path = self.default_path
         self.chain_index = 0
         self.chains = []

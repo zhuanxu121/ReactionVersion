@@ -20,7 +20,8 @@ functional_groups = {
     'C#N': 'C#N',
     'C(=O)N': 'C(=O)N',
     'S': 'S',
-    'S(=O)N': 'S(=O)N'
+    'S(=O)N': 'S(=O)N',
+    'C=N': 'C=N'
 }
 
 labels = [
@@ -41,6 +42,7 @@ labels = [
          "官能团 'C(=O)N' 的计数",
          "官能团 'S' 的计数",
          "官能团 'S(=O)N' 的计数",
+         "官能团 ‘C=N’ 的计数",
          "共轭键总数",
          "环总数",
          "环大小平均值",
@@ -136,9 +138,9 @@ def generate_global_vector(reaction_mixture, analyte, functional_groups):
         if mol is None:
             continue
         canon = Chem.MolToSmiles(mol)
-        # 排除当前分析物
-        if analyte_canon is not None and canon == analyte_canon:
-            continue
+        # # 排除当前分析物
+        # if analyte_canon is not None and canon == analyte_canon:
+        #     continue
 
         # 先处理官能团：对于 'C(=O)O' 和 'C(=O)'特殊处理
         carboxylic_pattern = Chem.MolFromSmarts('C(=O)O')
